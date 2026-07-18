@@ -99,11 +99,15 @@ export default async (req) => {
         generationConfig: { temperature: 0.4, maxOutputTokens: 4096 },
       };
 
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 22000);
       const r = await fetch(`${API_BASE}/${model}:generateContent`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
+      clearTimeout(timer);
       const raw = await r.text();
       console.log(`[${model}] status=${r.status} body=${raw.slice(0, 2000)}`);
       let data;

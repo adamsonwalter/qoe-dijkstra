@@ -255,7 +255,10 @@ $("f").addEventListener("submit", async e=>{
   $("progress").scrollIntoView({behavior:"smooth"});
   startPhases();
   try{
+    const controller = new AbortController();
+    const fetchTimer = setTimeout(()=>controller.abort(), 65000);
     const r = await fetch("/api/analyze", {
+      signal: controller.signal
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ company, focus: $("focus").value.trim() })
@@ -281,7 +284,7 @@ $("f").addEventListener("submit", async e=>{
     clearInterval(phaseTimer);
     $("progress").style.display = "none";
     $("report").style.display = "block";
-    $("article").innerHTML = `<p class="err">The assessment took longer than the connection allowed. Please try again — a second pass is usually faster.</p>`;
+    $("article").innerHTML = `<p class="err">The assessment timed out — large companies with many filings can take longer. Please try again; a second pass is usually faster.</p>`;
   }finally{
     $("btn").disabled = false;
   }
