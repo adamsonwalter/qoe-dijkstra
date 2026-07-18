@@ -254,41 +254,97 @@ $("f").addEventListener("submit", async e=>{
   $("progress").style.display = "block";
   $("progress").scrollIntoView({behavior:"smooth"});
   startPhases();
+  let tried = false;
   try{
     const controller = new AbortController();
     const fetchTimer = setTimeout(()=>controller.abort(), 65000);
     const r = await fetch("/api/analyze", {
-      signal: controller.signal
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ company, focus: $("focus").value.trim() })
+      signal: controller.signal,
+      body: JSON.stringify({ company, focus: $("focus").value.trim(), fast: tried })
     });
+    clearTimeout(fetchTimer);
     const data = await r.json();
     clearInterval(phaseTimer);
     $("progress").style.display = "none";
     $("report").style.display = "block";
     if(data.error){
-      $("article").innerHTML = `<p class="err">${data.error}</p>`;
-    } else {
-      raw = data.report;
-      let html = mdToHtml(data.report);
-      if(data.sources && data.sources.length){
-        html += "<h2>Documents consulted</h2><ul>" +
-          data.sources.slice(0,10).map(s=>`<li><a href="${s.uri}" target="_blank" rel="noopener">${s.title||s.uri}</a></li>`).join("") + "</ul>";
+      // Auto-retry once with fast path on timeout/502
+      if(!tried && (r.status===502 || (data.error||"").match(/timeout|timed out|took longer/i))){
+        tried = true;
+        $("progress").style.display = "block";
+        $("progress").scrollIntoView({behavior:"smooth"});
+        startPhases();
+        const r2 = await fetch("/api/analyze", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ company, focus: $("focus").value.trim(), fast: true })
+        });
+        const data2 = await r2.json();
+        $("progress").style.display = "none";
+        if(data2.error){
+          $("article").innerHTML = `<p class="err">${data2.error}</p>`;
+        } else {
+          showReport(data2);
+        }
+      } else {
+        $("article").innerHTML = `<p class="err">${data.error}</p>`;
       }
-      $("article").innerHTML = html;
-      $("stamp").textContent = "Desk assessment · " + new Date().toLocaleDateString(undefined,{day:"numeric",month:"long",year:"numeric"});
+    } else {
+      showReport(data);
     }
     $("report").scrollIntoView({behavior:"smooth"});
   }catch(err){
     clearInterval(phaseTimer);
     $("progress").style.display = "none";
     $("report").style.display = "block";
-    $("article").innerHTML = `<p class="err">The assessment timed out — large companies with many filings can take longer. Please try again; a second pass is usually faster.</p>`;
+    $("article").innerHTML = `<p class="err">The connection timed out. Please try again — a second pass is usually faster.</p>`;
   }finally{
     $("btn").disabled = false;
   }
 });
+
+function showReport(data){
+  raw = data.report;
+  let html = mdToHtml(data.report);
+  if(data.sources && data.sources.length){
+    html += "<h2>Documents consulted</h2><ul>" +
+      data.sources.slice(0,10).map(s=>`<li><a href="${s.uri}" target="_blank" rel="noopener">${s.title||s.uri}</a></li>`).join("") + "</ul>";
+  }
+  if(data.fast){
+    html += `<p style="margin-top:1.5rem;font-style:italic;color:var(--ink-soft);font-size:.9rem">Quick assessment — source citations not included on this pass. <button onclick="retryFull()" style="background:transparent;border:1px solid var(--line);color:var(--moss);padding:.3rem .8rem;border-radius:999px;cursor:pointer;font-size:.75rem;letter-spacing:.1em;text-transform:uppercase">Full grounded analysis</button></p>`;
+  }
+  $("article").innerHTML = html;
+  $("stamp").textContent = "Desk assessment · " + new Date().toLocaleDateString(undefined,{day:"numeric",month:"long",year:"numeric"});
+}
+
+function retryFull(){
+  $("report").style.display = "none";
+  $("progress").style.display = "block";
+  $("progress").scrollIntoView({behavior:"smooth"});
+  startPhases();
+  fetch("/api/analyze", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ company: $("company").value.trim(), focus: $("focus").value.trim() })
+  }).then(r=>r.json()).then(data=>{
+    clearInterval(phaseTimer);
+    $("progress").style.display = "none";
+    $("report").style.display = "block";
+    if(data.error){
+      $("article").innerHTML = `<p class="err">${data.error}</p>`;
+    } else {
+      showReport(data);
+    }
+    $("report").scrollIntoView({behavior:"smooth"});
+  }).catch(()=>{
+    clearInterval(phaseTimer);
+    $("progress").style.display = "none";
+    $("report").style.display = "block";
+    $("article").innerHTML = `<p class="err">The connection timed out. Please try again.</p>`;
+  });
+}
 
 $("copy").addEventListener("click", ()=>{
   navigator.clipboard.writeText(raw || $("article").innerText);

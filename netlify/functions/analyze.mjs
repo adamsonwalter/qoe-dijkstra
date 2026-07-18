@@ -1,8 +1,13 @@
 // Earnings Quality Assessment — Gemini API (generateContent)
+// Two-pass strategy:
+//   Pass 1 (full):  google_search + full output — may timeout on complex companies
+//   Pass 2 (fast):  no search, shorter output — reliable fallback
+// Client sends { company, focus, fast: true } to request the fast path.
 // No npm dependencies. Uses native fetch (Node 18+).
 // Requires environment variable GEMINI_API_KEY set in Netlify UI.
 
-const MODELS = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro"];
+const MODELS_FULL  = ["gemini-2.5-flash", "gemini-2.5-pro"];
+const MODELS_FAST  = ["gemini-2.5-flash"];
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 const SYSTEM_PROMPT = `
@@ -63,6 +68,40 @@ you did find, and list exactly which documents would let you finish the job.
 Keep total length 700–1100 words. Never invent numbers; if estimating, say so.
 `;
 
+async function callGemini(model, payload, key, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${API_BASE}/${model}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const raw = await r.text();
+    console.log(`[${model}] status=${r.status} body=${raw.slice(0, 2000)}`);
+    let data;
+    try { data = JSON.parse(raw); } catch {
+      return { error: `API returned invalid JSON: ${raw.slice(0, 300)}` };
+    }
+    if (!r.ok) return { error: data?.error?.message || `HTTP ${r.status}` };
+
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const text = parts.map(p => p.text || "").join("");
+    if (!text) return { error: "Empty response from model" };
+
+    const grounding = data?.candidates?.[0]?.groundingMetadata?.groundingChunks
+      ?.map(c => c?.web ? { title: c.web.title, uri: c.web.uri } : null)
+      .filter(Boolean) || [];
+
+    return { text, sources: grounding, model };
+  } catch (e) {
+    clearTimeout(timer);
+    return { error: e.message || String(e) };
+  }
+}
+
 export default async (req) => {
   const cors = {
     "Access-Control-Allow-Origin": "*",
@@ -81,6 +120,7 @@ export default async (req) => {
   try { body = await req.json(); } catch { body = {}; }
   const company = (body.company || "").toString().trim().slice(0, 300);
   const focus = (body.focus || "").toString().trim().slice(0, 500);
+  const fast = body.fast === true;
   if (!company)
     return new Response(JSON.stringify({ error: "Provide a company name or website URL." }), { status: 400, headers: cors });
 
@@ -89,45 +129,40 @@ export default async (req) => {
     (focus ? `Owner's particular concern: ${focus}\n` : "") +
     `Research the latest available filings and investor materials, then write the assessment.`;
 
-  let lastErr = "";
-  for (const model of MODELS) {
-    try {
-      const payload = {
-        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: { temperature: 0.4, maxOutputTokens: 4096 },
-      };
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 22000);
-      const r = await fetch(`${API_BASE}/${model}:generateContent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      const raw = await r.text();
-      console.log(`[${model}] status=${r.status} body=${raw.slice(0, 2000)}`);
-      let data;
-      try { data = JSON.parse(raw); } catch (parseErr) {
-        lastErr = `API returned invalid JSON: ${raw.slice(0, 500)}`;
-        continue;
+  // --- FAST PATH: no search, shorter output, single model, 15s timeout ---
+  if (fast) {
+    const payload = {
+      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+      generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
+    };
+    for (const model of MODELS_FAST) {
+      const result = await callGemini(model, payload, key, 15000);
+      if (result.text) {
+        return new Response(JSON.stringify({
+          report: result.text, sources: [], model: result.model, fast: true,
+        }), { status: 200, headers: cors });
       }
-      if (!r.ok) { lastErr = data?.error?.message || `HTTP ${r.status}`; continue; }
-
-      const parts = data?.candidates?.[0]?.content?.parts || [];
-      const text = parts.map(p => p.text || "").join("");
-      if (!text) { lastErr = "Empty response from model"; continue; }
-      const grounding = data?.candidates?.[0]?.groundingMetadata?.groundingChunks
-        ?.map(c => c?.web ? { title: c.web.title, uri: c.web.uri } : null)
-        .filter(Boolean) || [];
-
-      return new Response(JSON.stringify({ report: text, sources: grounding, model }), { status: 200, headers: cors });
-    } catch (e) {
-      lastErr = e.message || String(e);
     }
+    return new Response(JSON.stringify({ error: `Fast analysis failed: ${result.error}` }), { status: 502, headers: cors });
+  }
+
+  // --- FULL PATH: google search, full output, model fallback, 22s timeout per model ---
+  const payload = {
+    system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+    tools: [{ google_search: {} }],
+    generationConfig: { temperature: 0.4, maxOutputTokens: 4096 },
+  };
+  let lastErr = "";
+  for (const model of MODELS_FULL) {
+    const result = await callGemini(model, payload, key, 22000);
+    if (result.text) {
+      return new Response(JSON.stringify({
+        report: result.text, sources: result.sources, model: result.model,
+      }), { status: 200, headers: cors });
+    }
+    lastErr = result.error;
   }
   return new Response(JSON.stringify({ error: `Analysis failed: ${lastErr}` }), { status: 502, headers: cors });
 };
