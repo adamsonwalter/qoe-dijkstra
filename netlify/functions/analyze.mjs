@@ -6,8 +6,8 @@
 // No npm dependencies. Uses native fetch (Node 18+).
 // Requires environment variable GEMINI_API_KEY set in Netlify UI.
 
-const MODELS_FULL  = ["gemini-2.5-flash", "gemini-2.5-pro"];
-const MODELS_FAST  = ["gemini-2.5-flash"];
+const MODELS_FULL  = ["gemini-3.5-flash", "gemini-2.5-flash"];
+const MODELS_FAST  = ["gemini-3.5-flash"];
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 const SYSTEM_PROMPT = `
