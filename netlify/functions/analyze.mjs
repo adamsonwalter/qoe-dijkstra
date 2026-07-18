@@ -1,8 +1,9 @@
-// Earnings Quality Assessment — Gemini-backed Netlify Function
+// Earnings Quality Assessment — Gemini Interactions API
 // No npm dependencies. Uses native fetch (Node 18+).
 // Requires environment variable GEMINI_API_KEY set in Netlify UI.
 
 const MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"];
+const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 const SYSTEM_PROMPT = `
 You are a senior financial analyst preparing a Quality of Earnings (QoE) assessment
@@ -99,7 +100,7 @@ export default async (req) => {
   for (const model of MODELS) {
     try {
       const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        `${API_BASE}/${model}:interact`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-goog-api-key": key },
@@ -108,10 +109,10 @@ export default async (req) => {
       );
       const data = await r.json();
       if (!r.ok) { lastErr = data?.error?.message || `HTTP ${r.status}`; continue; }
-      const parts = data?.candidates?.[0]?.content?.parts || [];
-      const text = parts.map(p => p.text || "").join("");
+      const interaction = data?.candidates?.[0]?.content?.parts?.[0];
+      const text = interaction?.text || "";
       if (!text) { lastErr = "Empty response from model"; continue; }
-      const grounding = data?.candidates?.[0]?.groundingMetadata?.groundingChunks
+      const grounding = interaction?.groundingMetadata?.groundingChunks
         ?.map(c => c?.web ? { title: c.web.title, uri: c.web.uri } : null)
         .filter(Boolean) || [];
       return new Response(JSON.stringify({ report: text, sources: grounding, model }), { status: 200, headers: cors });
