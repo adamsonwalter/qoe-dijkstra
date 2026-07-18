@@ -106,7 +106,13 @@ export default async (req) => {
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify(payload),
       });
-      const data = await r.json();
+      const raw = await r.text();
+      console.log(`[${model}] status=${r.status} body=${raw.slice(0, 2000)}`);
+      let data;
+      try { data = JSON.parse(raw); } catch (parseErr) {
+        lastErr = `API returned invalid JSON: ${raw.slice(0, 500)}`;
+        continue;
+      }
       if (!r.ok) { lastErr = data?.error?.message || `HTTP ${r.status}`; continue; }
 
       // Interactions API response: find the last model_output step and extract text + annotations
