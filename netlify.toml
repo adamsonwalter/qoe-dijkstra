@@ -1,5 +1,4 @@
 [build]
-  base    = "qoe-app"
   publish = "."
   functions = "netlify/functions"
 
