@@ -19,3 +19,13 @@
 **Solution:** Primary/fast path = `gemini-3.5-flash`; keep `gemini-2.5-flash` as full-path fallback only.
 
 **Why:** User confirmed 3.5-flash works in practice; 2.0 flash is shut down per Google docs.
+
+## 2026-07-18 — Empty response from gemini-3.5-flash
+
+**Problem:** Fast analysis failed with "Empty response from model".
+
+**Cause:** Gemini 3.x enables thinking by default; thinking tokens consume maxOutputTokens, leaving zero answer tokens (finishReason=MAX_TOKENS).
+
+**Solution:** Set thinkingConfig.thinkingLevel (minimal fast / low full), raise maxOutputTokens (8k/16k), skip thought parts when extracting text, longer per-call timeouts.
+
+**Why:** Matches Google docs for Gemini 3.5 Flash; empty content is the known symptom of under-budgeted output with thinking on.

@@ -6,7 +6,7 @@
 // No npm dependencies. Uses native fetch (Node 18+).
 // Requires environment variable GEMINI_API_KEY set in Netlify UI.
 
-const MODELS_FULL  = ["gemini-3.5-flash", "gemini-2.5-flash"];
+const MODELS_FULL  = ["gemini-3.5-flash"];
 const MODELS_FAST  = ["gemini-3.5-flash"];
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -87,11 +87,20 @@ async function callGemini(model, payload, key, timeoutMs) {
     }
     if (!r.ok) return { error: data?.error?.message || `HTTP ${r.status}` };
 
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const text = parts.map(p => p.text || "").join("");
-    if (!text) return { error: "Empty response from model" };
+    const candidate = data?.candidates?.[0];
+    const parts = candidate?.content?.parts || [];
+    // Skip thought summaries — only keep the visible answer text
+    const text = parts.filter(p => p.text && !p.thought).map(p => p.text).join("");
+    if (!text) {
+      const reason = candidate?.finishReason || "unknown";
+      const thoughts = data?.usageMetadata?.thoughtsTokenCount;
+      return {
+        error: `Empty response from model (finishReason=${reason}` +
+          (thoughts != null ? `, thoughtsTokens=${thoughts}` : "") + ")",
+      };
+    }
 
-    const grounding = data?.candidates?.[0]?.groundingMetadata?.groundingChunks
+    const grounding = candidate?.groundingMetadata?.groundingChunks
       ?.map(c => c?.web ? { title: c.web.title, uri: c.web.uri } : null)
       .filter(Boolean) || [];
 
@@ -132,16 +141,22 @@ export default async (req) => {
     (focus ? `Owner's particular concern: ${focus}\n` : "") +
     `Research the latest available filings and investor materials, then write the assessment.`;
 
-  // --- FAST PATH: no search, shorter output, single model, 15s timeout ---
+  // --- FAST PATH: no search, shorter output, single model, 25s timeout ---
+  // Gemini 3.x thinking tokens count against maxOutputTokens — keep thinking
+  // minimal and leave enough room for the actual report.
   if (fast) {
     const payload = {
       system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-      generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
+      generationConfig: {
+        temperature: 0.4,
+        maxOutputTokens: 8192,
+        thinkingConfig: { thinkingLevel: "minimal" },
+      },
     };
     let lastErr = "";
     for (const model of MODELS_FAST) {
-      const result = await callGemini(model, payload, key, 15000);
+      const result = await callGemini(model, payload, key, 25000);
       if (result.text) {
         return new Response(JSON.stringify({
           report: result.text, sources: [], model: result.model, fast: true,
@@ -152,16 +167,20 @@ export default async (req) => {
     return new Response(JSON.stringify({ error: `Fast analysis failed: ${lastErr}` }), { status: 502, headers: cors });
   }
 
-  // --- FULL PATH: google search, full output, model fallback, 22s timeout per model ---
+  // --- FULL PATH: google search, full output, 50s timeout (Netlify cap 60s) ---
   const payload = {
     system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
     contents: [{ role: "user", parts: [{ text: userPrompt }] }],
     tools: [{ google_search: {} }],
-    generationConfig: { temperature: 0.4, maxOutputTokens: 4096 },
+    generationConfig: {
+      temperature: 0.4,
+      maxOutputTokens: 16384,
+      thinkingConfig: { thinkingLevel: "low" },
+    },
   };
   let lastErr = "";
   for (const model of MODELS_FULL) {
-    const result = await callGemini(model, payload, key, 22000);
+    const result = await callGemini(model, payload, key, 50000);
     if (result.text) {
       return new Response(JSON.stringify({
         report: result.text, sources: result.sources, model: result.model,
