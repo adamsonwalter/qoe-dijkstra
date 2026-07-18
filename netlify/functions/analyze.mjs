@@ -1,9 +1,9 @@
-// Earnings Quality Assessment — Gemini Interactions API
+// Earnings Quality Assessment — Gemini API (generateContent)
 // No npm dependencies. Uses native fetch (Node 18+).
 // Requires environment variable GEMINI_API_KEY set in Netlify UI.
 
-const MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"];
-const API_URL = "https://generativelanguage.googleapis.com/v1beta2/interactions";
+const MODELS = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro"];
+const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 const SYSTEM_PROMPT = `
 You are a senior financial analyst preparing a Quality of Earnings (QoE) assessment
@@ -93,15 +93,13 @@ export default async (req) => {
   for (const model of MODELS) {
     try {
       const payload = {
-        model,
-        store: false,
-        input: userPrompt,
-        system_instruction: SYSTEM_PROMPT,
-        tools: [{ type: "google_search" }],
-        generation_config: { temperature: 0.4, max_output_tokens: 4096 },
+        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { temperature: 0.4, maxOutputTokens: 4096 },
       };
 
-      const r = await fetch(API_URL, {
+      const r = await fetch(`${API_BASE}/${model}:generateContent`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify(payload),
@@ -115,47 +113,14 @@ export default async (req) => {
       }
       if (!r.ok) { lastErr = data?.error?.message || `HTTP ${r.status}`; continue; }
 
-      // Interactions API response: find the last model_output step and extract text + annotations
-      const steps = data?.steps || [];
-      let text = "";
-      const sources = [];
-
-      for (const step of steps) {
-        if (step.type === "model_output" && step.content) {
-          for (const part of step.content) {
-            if (part.type === "text" && part.text) {
-              text += part.text;
-              // Collect inline annotations (citations from google_search)
-              if (part.annotations) {
-                for (const anno of part.annotations) {
-                  sources.push({ title: anno.title, uri: anno.uri });
-                }
-              }
-            }
-          }
-        }
-        // Also collect sources from google_search_result steps
-        if (step.type === "google_search_result" && step.content) {
-          for (const part of step.content) {
-            if (part.type === "text" && part.text) {
-              const already = sources.some(s => s.uri === part.uri);
-              if (!already) sources.push({ title: part.title || part.text, uri: part.uri });
-            }
-          }
-        }
-      }
-
+      const parts = data?.candidates?.[0]?.content?.parts || [];
+      const text = parts.map(p => p.text || "").join("");
       if (!text) { lastErr = "Empty response from model"; continue; }
+      const grounding = data?.candidates?.[0]?.groundingMetadata?.groundingChunks
+        ?.map(c => c?.web ? { title: c.web.title, uri: c.web.uri } : null)
+        .filter(Boolean) || [];
 
-      // Deduplicate sources by uri
-      const seen = new Set();
-      const uniqueSources = sources.filter(s => {
-        if (seen.has(s.uri)) return false;
-        seen.add(s.uri);
-        return s.uri;
-      });
-
-      return new Response(JSON.stringify({ report: text, sources: uniqueSources, model }), { status: 200, headers: cors });
+      return new Response(JSON.stringify({ report: text, sources: grounding, model }), { status: 200, headers: cors });
     } catch (e) {
       lastErr = e.message || String(e);
     }
