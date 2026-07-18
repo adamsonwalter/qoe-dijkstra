@@ -2,7 +2,7 @@
 // No npm dependencies. Uses native fetch (Node 18+).
 // Requires environment variable GEMINI_API_KEY set in Netlify UI.
 
-const MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
+const MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"];
 
 const SYSTEM_PROMPT = `
 You are a senior financial analyst preparing a Quality of Earnings (QoE) assessment
