@@ -98,6 +98,9 @@ async function callGemini(model, payload, key, timeoutMs) {
     return { text, sources: grounding, model };
   } catch (e) {
     clearTimeout(timer);
+    if (e.name === "AbortError" || /aborted/i.test(e.message || "")) {
+      return { error: `Model timed out after ${Math.round(timeoutMs / 1000)}s` };
+    }
     return { error: e.message || String(e) };
   }
 }
@@ -136,6 +139,7 @@ export default async (req) => {
       contents: [{ role: "user", parts: [{ text: userPrompt }] }],
       generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
     };
+    let lastErr = "";
     for (const model of MODELS_FAST) {
       const result = await callGemini(model, payload, key, 15000);
       if (result.text) {
@@ -143,8 +147,9 @@ export default async (req) => {
           report: result.text, sources: [], model: result.model, fast: true,
         }), { status: 200, headers: cors });
       }
+      lastErr = result.error || "unknown error";
     }
-    return new Response(JSON.stringify({ error: `Fast analysis failed: ${result.error}` }), { status: 502, headers: cors });
+    return new Response(JSON.stringify({ error: `Fast analysis failed: ${lastErr}` }), { status: 502, headers: cors });
   }
 
   // --- FULL PATH: google search, full output, model fallback, 22s timeout per model ---

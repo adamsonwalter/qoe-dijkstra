@@ -265,7 +265,11 @@ $("f").addEventListener("submit", async e=>{
       body: JSON.stringify({ company, focus: $("focus").value.trim(), fast: tried })
     });
     clearTimeout(fetchTimer);
-    const data = await r.json();
+    const raw = await r.text();
+    let data;
+    try { data = JSON.parse(raw); } catch {
+      throw new Error(r.ok ? "Invalid JSON from server" : `Server error ${r.status}: ${raw.slice(0,200) || "(empty)"}`);
+    }
     clearInterval(phaseTimer);
     $("progress").style.display = "none";
     $("report").style.display = "block";
@@ -281,7 +285,11 @@ $("f").addEventListener("submit", async e=>{
           headers:{"Content-Type":"application/json"},
           body: JSON.stringify({ company, focus: $("focus").value.trim(), fast: true })
         });
-        const data2 = await r2.json();
+        const raw2 = await r2.text();
+        let data2;
+        try { data2 = JSON.parse(raw2); } catch {
+          throw new Error(r2.ok ? "Invalid JSON from server" : `Server error ${r2.status}: ${raw2.slice(0,200) || "(empty)"}`);
+        }
         $("progress").style.display = "none";
         if(data2.error){
           $("article").innerHTML = `<p class="err">${data2.error}</p>`;
@@ -299,7 +307,11 @@ $("f").addEventListener("submit", async e=>{
     clearInterval(phaseTimer);
     $("progress").style.display = "none";
     $("report").style.display = "block";
-    $("article").innerHTML = `<p class="err">The connection timed out. Please try again — a second pass is usually faster.</p>`;
+    const timedOut = err.name === "AbortError" || /aborted|timed out|timeout/i.test(err.message||"");
+    const msg = timedOut
+      ? "The connection timed out. Please try again — a second pass is usually faster."
+      : (err.message || "Request failed.");
+    $("article").innerHTML = `<p class="err">${msg}</p>`;
   }finally{
     $("btn").disabled = false;
   }
@@ -328,7 +340,11 @@ function retryFull(){
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ company: $("company").value.trim(), focus: $("focus").value.trim() })
-  }).then(r=>r.json()).then(data=>{
+  }).then(async r=>{
+    const raw = await r.text();
+    try { return JSON.parse(raw); }
+    catch { throw new Error(r.ok ? "Invalid JSON from server" : `Server error ${r.status}: ${raw.slice(0,200) || "(empty)"}`); }
+  }).then(data=>{
     clearInterval(phaseTimer);
     $("progress").style.display = "none";
     $("report").style.display = "block";
@@ -338,11 +354,12 @@ function retryFull(){
       showReport(data);
     }
     $("report").scrollIntoView({behavior:"smooth"});
-  }).catch(()=>{
+  }).catch(err=>{
     clearInterval(phaseTimer);
     $("progress").style.display = "none";
     $("report").style.display = "block";
-    $("article").innerHTML = `<p class="err">The connection timed out. Please try again.</p>`;
+    const timedOut = err.name === "AbortError" || /aborted|timed out|timeout/i.test(err.message||"");
+    $("article").innerHTML = `<p class="err">${timedOut ? "The connection timed out. Please try again." : (err.message || "Request failed.")}</p>`;
   });
 }
 
